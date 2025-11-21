@@ -1,48 +1,79 @@
 """
-Database Schemas
+Masjid Fund Collection Schemas
 
-Define your MongoDB collection schemas here using Pydantic models.
-These schemas are used for data validation in your application.
+Each Pydantic model here maps to a MongoDB collection (lowercase of class name).
+We model a multi-tenant system supporting multiple masjids, projects, pledges,
+contributions (with payment proofs), and expenses logged by accountants.
 
-Each Pydantic model represents a collection in your database.
-Model name is converted to lowercase for the collection name:
-- User -> "user" collection
-- Product -> "product" collection
-- BlogPost -> "blogs" collection
+Authentication is OTP-like via mobile; default OTP is the mobile number itself
+until the user changes it. Roles: super_admin (global), admin/accountant per masjid.
 """
-
+from typing import Optional, List, Literal, Dict
 from pydantic import BaseModel, Field
-from typing import Optional
+from datetime import datetime
 
-# Example schemas (replace with your own):
+Frequency = Literal["one_time", "weekly", "monthly", "yearly"]
+PaymentMode = Literal["direct", "online", "gpay"]
+Role = Literal["super_admin", "admin", "accountant", "member"]
+
 
 class User(BaseModel):
-    """
-    Users collection schema
-    Collection name: "user" (lowercase of class name)
-    """
-    name: str = Field(..., description="Full name")
-    email: str = Field(..., description="Email address")
-    address: str = Field(..., description="Address")
-    age: Optional[int] = Field(None, ge=0, le=120, description="Age in years")
-    is_active: bool = Field(True, description="Whether user is active")
+    mobile: str = Field(..., description="Unique mobile number, also default OTP")
+    name: Optional[str] = Field(None)
+    otp: Optional[str] = Field(None, description="If None, defaults to mobile")
+    # roles per masjid: masjid_id -> role (admin/accountant/member). super_admin via is_super_admin
+    roles: Dict[str, Role] = Field(default_factory=dict)
+    is_super_admin: bool = Field(False)
 
-class Product(BaseModel):
-    """
-    Products collection schema
-    Collection name: "product" (lowercase of class name)
-    """
-    title: str = Field(..., description="Product title")
-    description: Optional[str] = Field(None, description="Product description")
-    price: float = Field(..., ge=0, description="Price in dollars")
-    category: str = Field(..., description="Product category")
-    in_stock: bool = Field(True, description="Whether product is in stock")
 
-# Add your own schemas here:
-# --------------------------------------------------
+class Masjid(BaseModel):
+    name: str
+    address: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    support_whatsapp: Optional[str] = Field(None, description="WhatsApp support number for OTP help")
 
-# Note: The Flames database viewer will automatically:
-# 1. Read these schemas from GET /schema endpoint
-# 2. Use them for document validation when creating/editing
-# 3. Handle all database operations (CRUD) directly
-# 4. You don't need to create any database endpoints!
+
+class Project(BaseModel):
+    masjid_id: str
+    title: str
+    description: Optional[str] = None
+    is_public: bool = Field(True)
+    landing_slug: Optional[str] = Field(None, description="Public slug for sharing")
+    # payment presentation
+    gpay_url: Optional[str] = None
+    gpay_upi: Optional[str] = None
+    gpay_qr_image: Optional[str] = Field(None, description="QR image URL")
+    # allowed frequencies to suggest on UI
+    allowed_frequencies: List[Frequency] = Field(default_factory=lambda: ["one_time", "weekly", "monthly", "yearly"])
+
+
+class Participant(BaseModel):
+    project_id: str
+    user_id: str
+    pledge_amount: Optional[float] = Field(None, ge=0)
+    frequency: Optional[Frequency] = None
+    preferred_mode: Optional[PaymentMode] = None
+
+
+class Contribution(BaseModel):
+    project_id: str
+    user_id: Optional[str] = None
+    mobile: Optional[str] = Field(None, description="Mobile of contributor (for guest)")
+    name: Optional[str] = None
+    amount: float = Field(..., gt=0)
+    mode: PaymentMode
+    paid_at: Optional[datetime] = None
+    note: Optional[str] = None
+    proof_url: Optional[str] = Field(None, description="Screenshot/receipt URL if online")
+    approved: bool = Field(True, description="Visible to all; could be moderated later")
+
+
+class Expense(BaseModel):
+    masjid_id: str
+    project_id: str
+    amount: float = Field(..., gt=0)
+    description: str
+    spent_at: Optional[datetime] = None
+    added_by_user_id: Optional[str] = None
+    attachment_url: Optional[str] = None
+
